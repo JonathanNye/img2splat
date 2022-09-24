@@ -70,7 +70,7 @@ fun main(args: Array<String>) {
         ArgType.String,
         fullName = "repairRows",
         shortName = "r",
-        description = "Comma separated-list of image rows between 0 and ${HEIGHT - 1} inclusive to repair, e.g. 78,79,80",
+        description = "Comma separated-list of image rows or ranges between 0 and ${HEIGHT - 1} inclusive to repair, e.g. 78,99-102,105",
     )
 
     parser.parse(args)
@@ -100,19 +100,17 @@ fun main(args: Array<String>) {
         return
     }
 
-    val repairRows = repairInput?.split(',')
-        ?.map {
-            try { it.toInt() } catch (t: Throwable) {
-                println("\"$it\" is not a valid repair row")
+    val repairRanges = repairInput?.split(',')
+        ?.map { token ->
+            try {
+                token.toRowRange()
+            } catch (t: Throwable) {
+                println("\"$token\" is not a valid repair row or range")
                 return@main
             }
-        }
-        ?.onEach {
-            if (it < 0 || it > HEIGHT - 1) {
-                println("Repair rows should be between 0 and ${HEIGHT - 1} inclusive")
-                return@main
-            }
-        } ?: (0 until HEIGHT).toList() // Default to "repairing" all the rows -- do the whole image
+        } ?: listOf(0 until HEIGHT) // Default to "repairing" all the rows -- do the whole image
+    val repairRows = repairRanges
+        .flatMap { it.toList() }
 
     val macro = MacroBuilder(pressDuration)
     var currentDirection: HorizontalDirection = HorizontalDirection.RIGHT
@@ -208,4 +206,19 @@ fun generatePreview(commands: List<Command>) {
     }
     val outFile = File(PREVIEW_FILENAME)
     ImageIO.write(img, PREVIEW_TYPE, outFile)
+}
+
+fun String.toRowRange(): IntRange {
+    val range = if (!this.contains("-")) { // Assume it's a single number
+            val number = this.toInt()
+            number..number
+        } else { // Try to split it apart
+            val numbers = this.split('-')
+            numbers[0].toInt()..numbers[1].toInt()
+        }
+    if (range.first < 0 || range.first >= HEIGHT -1 ||
+        range.last < 0 || range.last >= HEIGHT) {
+        throw Exception("Range outside image bounds")
+    }
+    return range
 }
