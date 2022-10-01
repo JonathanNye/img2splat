@@ -186,11 +186,15 @@ class Img2Splat(private val options: Options) {
             }
 
             val encodedLine = runLengthEncode(options.img, y, currentDirection)
-            macro.addRunLengthEncodedLine(encodedLine)
 
-            currentDirection = when (currentDirection) {
-                HorizontalDirection.LEFT -> HorizontalDirection.RIGHT
-                HorizontalDirection.RIGHT -> HorizontalDirection.LEFT
+            // Only add the commands and swap direction if the line has pixels to draw
+            if (encodedLine.segments != listOf(RunLengthSegment(WIDTH, false))) {
+                macro.addRunLengthEncodedLine(encodedLine)
+
+                currentDirection = when (currentDirection) {
+                    HorizontalDirection.LEFT -> HorizontalDirection.RIGHT
+                    HorizontalDirection.RIGHT -> HorizontalDirection.LEFT
+                }
             }
             if (y < HEIGHT - 1) { // Don't go off the bottom edge
                 macro.addButtonPress(Button.DOWN)

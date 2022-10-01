@@ -39,6 +39,12 @@ first argument:
 
 `java -jar img2splat.jar myimage.png`
 
+### Preview Image
+
+In addition to the NXBT macro, an image named `macro_preview.png` will also be generated to visually show what the
+output of the macro might look like. Pixels that the macro will "visit" with the drawing cursor will be black or white.
+Any "unvisited" pixels will be blue; this can happen as the result of an optimization or if you specify repair rows.
+
 ### Macro Button Press Duration
 
 You can also specify the length of button presses/releases in the generated macro. By default, buttons are pressed for
@@ -61,6 +67,5 @@ Values should be between `0` and `119`. Example:
 
 `java -jar img2splat.jar myimage.png -r 28,77-82,100`
 
-When using repair mode, `macro_preview.png` will show "unvisited" pixels -- areas to be skipped by the macro -- as blue.
 Repair macros still start from the upper-left corner of the canvas like regular macros, so most preparation steps are
 the same.
