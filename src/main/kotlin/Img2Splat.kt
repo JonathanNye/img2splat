@@ -12,7 +12,7 @@ const val HEIGHT = 120
 const val MACRO_FILENAME = "splat_macro.txt"
 const val PREVIEW_FILENAME = "macro_preview.png"
 const val PREVIEW_TYPE = "png"
-const val DEFAULT_PRESS_DURATION = "0.1"
+val DEFAULT_PRESS_DURATION = BigDecimal("0.1")
 val MACRO_START_DELAY = BigDecimal("3.0")
 
 enum class Button(val macroToken: String) {
@@ -95,7 +95,7 @@ fun main(args: Array<String>) {
         fullName = "pressDuration",
         shortName = "d",
         description = "Duration of button presses in seconds, e.g. 0.1"
-    ).default(DEFAULT_PRESS_DURATION)
+    )
     val repairInput by parser.option(
         ArgType.String,
         fullName = "repairRows",
@@ -105,80 +105,117 @@ fun main(args: Array<String>) {
 
     parser.parse(args)
 
-    val imgFile = File(filePath)
-    val img: BufferedImage? = ImageIO.read(imgFile)
-
-    if (img == null) {
-        println("$filePath doesn't seem to be a valid image.")
-        return
-    }
-
-    if (img.width != WIDTH || img.height != HEIGHT) {
-        println("Image must be $WIDTH x $HEIGHT")
-        return
-    }
-
-    val pressDuration = try {
-        BigDecimal(durationInput)
+    val options = try {
+        Img2Splat.Options.validateAndBuildFromInput(
+            filePath = filePath,
+            durationInput = durationInput,
+            repairInput = repairInput
+        )
     } catch (t: Throwable) {
-        println("\"$durationInput\" is not a valid button press duration")
-        return
-    }
+        println(t.message)
+        null
+    } ?: return
+    Img2Splat(options).splat()
+}
 
-    if (pressDuration < BigDecimal.ZERO || pressDuration == BigDecimal.ZERO) {
-        println("Button press duration should be positive and non-zero")
-        return
-    }
+class Img2Splat(private val options: Options) {
 
-    val repairRanges = repairInput?.split(',')
-        ?.map { token ->
-            try {
-                token.toRowRange()
-            } catch (t: Throwable) {
-                println("\"$token\" is not a valid repair row or range")
-                return@main
+    data class Result(
+        val macroFile: File,
+        val previewFile: File
+    )
+    data class Options(
+        val img: BufferedImage,
+        val pressDuration: BigDecimal,
+        val repairRows: List<Int>,
+    ) {
+        companion object {
+            fun validateAndBuildFromInput(
+                filePath: String,
+                durationInput: String?,
+                repairInput: String?,
+            ): Options {
+                val imgFile = File(filePath)
+                val img: BufferedImage = ImageIO.read(imgFile)
+                    ?: throw IllegalArgumentException("$filePath doesn't seem to be a valid image.")
+
+                if (img.width != WIDTH || img.height != HEIGHT) {
+                    throw IllegalArgumentException("Image must be $WIDTH x $HEIGHT")
+                }
+
+                val pressDuration = durationInput?.let {
+                    try {
+                        BigDecimal(it)
+                    } catch (t: Throwable) {
+                        throw IllegalArgumentException("\"$it\" is not a valid button press duration")
+                    }
+                } ?: DEFAULT_PRESS_DURATION
+
+                if (pressDuration < BigDecimal.ZERO || pressDuration == BigDecimal.ZERO) {
+                    throw IllegalArgumentException("Button press duration should be positive and non-zero")
+                }
+
+                val repairRanges = repairInput?.split(',')
+                    ?.map { token ->
+                        try {
+                            token.toRowRange()
+                        } catch (t: Throwable) {
+                            throw IllegalArgumentException("\"$token\" is not a valid repair row or range")
+                        }
+                    } ?: listOf(0 until HEIGHT) // Default to "repairing" all the rows -- do the whole image
+                val repairRows = repairRanges
+                    .flatMap { it.toList() }
+
+                return Options(img, pressDuration, repairRows)
             }
-        } ?: listOf(0 until HEIGHT) // Default to "repairing" all the rows -- do the whole image
-    val repairRows = repairRanges
-        .flatMap { it.toList() }
+        }
+    }
 
-    val macro = MacroBuilder(pressDuration)
-    var currentDirection: HorizontalDirection = HorizontalDirection.RIGHT
+    fun splat(): Result {
 
-    macro.addNeutral(MACRO_START_DELAY)
+        val macro = MacroBuilder(options.pressDuration)
+        var currentDirection: HorizontalDirection = HorizontalDirection.RIGHT
 
-    for (y in (0 until HEIGHT)) {
-        if (!repairRows.contains(y)) {
-            // If we're not supposed to repair this row, just continue down to the next one
+        macro.addNeutral(MACRO_START_DELAY)
+
+        for (y in (0 until HEIGHT)) {
+            if (!options.repairRows.contains(y)) {
+                // If we're not supposed to repair this row, just continue down to the next one
+                if (y < HEIGHT - 1) { // Don't go off the bottom edge
+                    macro.addButtonPress(Button.DOWN)
+                }
+                continue
+            }
+
+            val encodedLine = runLengthEncode(options.img, y, currentDirection)
+            macro.addRunLengthEncodedLine(encodedLine)
+
+            currentDirection = when (currentDirection) {
+                HorizontalDirection.LEFT -> HorizontalDirection.RIGHT
+                HorizontalDirection.RIGHT -> HorizontalDirection.LEFT
+            }
             if (y < HEIGHT - 1) { // Don't go off the bottom edge
                 macro.addButtonPress(Button.DOWN)
             }
-            continue
         }
+        macro.addButtonPress(Button.MINUS)
+        macro.addNeutral(BigDecimal("5.0"))
 
-        val encodedLine = runLengthEncode(img, y, currentDirection)
-        macro.addRunLengthEncodedLine(encodedLine)
-
-        currentDirection = when (currentDirection) {
-            HorizontalDirection.LEFT -> HorizontalDirection.RIGHT
-            HorizontalDirection.RIGHT -> HorizontalDirection.LEFT
+        val macroFile = File(MACRO_FILENAME)
+        val out = macroFile.printWriter()
+        out.use {
+            macro.commands.forEach { command ->
+                out.println(command)
+            }
+            out.flush()
         }
-        if (y < HEIGHT - 1) { // Don't go off the bottom edge
-            macro.addButtonPress(Button.DOWN)
-        }
+        val previewFile = generatePreview(macro.commands)
+        println("Generated ${macro.commands.size} operations, nice!")
+        return Result(
+            macroFile = macroFile,
+            previewFile = previewFile,
+        )
     }
-    macro.addButtonPress(Button.MINUS)
-    macro.addNeutral(BigDecimal("5.0"))
-
-    val out = File(MACRO_FILENAME).printWriter()
-    out.use {
-        macro.commands.forEach { command ->
-            out.println(command)
-        }
-        out.flush()
-    }
-    generatePreview(macro.commands)
-    println("Generated ${macro.commands.size} operations, nice!")
 }
 
 data class RunLengthSegment(val length: Int, val isBlack: Boolean) {
@@ -227,7 +264,7 @@ fun BufferedImage.blackPixel(x: Int, y: Int): Boolean {
     return luminance < 0.5f
 }
 
-fun generatePreview(commands: List<Command>) {
+fun generatePreview(commands: List<Command>): File {
     val img = BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_INT_RGB)
     for (y in (0 until HEIGHT)) {
         for (x in (0 until WIDTH)) {
@@ -271,6 +308,7 @@ fun generatePreview(commands: List<Command>) {
     }
     val outFile = File(PREVIEW_FILENAME)
     ImageIO.write(img, PREVIEW_TYPE, outFile)
+    return outFile
 }
 
 fun String.toRowRange(): IntRange {
