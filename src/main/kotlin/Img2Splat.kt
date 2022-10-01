@@ -85,11 +85,9 @@ enum class HorizontalDirection(val moveButton: Button) {
 
 fun main(args: Array<String>) {
     val parser = ArgParser("java -jar img2splat.jar")
-    val filePath by parser.option(ArgType.String,
+    val filePath by parser.argument(ArgType.String,
         fullName = "input",
-        shortName = "i",
         description = "Input image path")
-        .required()
     val durationInput by parser.option(
         ArgType.String,
         fullName = "pressDuration",

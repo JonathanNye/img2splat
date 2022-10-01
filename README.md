@@ -34,17 +34,17 @@ with Splatoon 3, but might work with earlier titles.
 
 ## Running img2splat
 
-img2splat needs [Java](https://www.java.com/en/download/) to run. At a minimum, you have to provide an image via
-the `input`/`i` flag:
+img2splat needs [Java](https://www.java.com/en/download/) to run. At a minimum, you have to provide an image as the
+first argument:
 
-`java -jar img2splat.jar -i myimage.png`
+`java -jar img2splat.jar myimage.png`
 
 ### Macro Button Press Duration
 
 You can also specify the length of button presses/releases in the generated macro. By default, buttons are pressed for
 0.1 seconds and released for the same. You can override this via the `pressDuration`/`d` flag:
 
-`java -jar img2splat.jar -i myimage.png -d 0.05`
+`java -jar img2splat.jar myimage.png -d 0.05`
 
 A macro with a press duration of 0.05 would run approximately twice as fast as default. The tradeoff, however, is you
 may be more likely to run into missed button presses and a compromised image. This ultimately boils down to the
@@ -59,7 +59,7 @@ re-run a "repair" macro and not have to wait for the whole thing to re-draw!
 Repair rows can be specified as a comma-separated list of individual pixel rows (e.g. `28`) or a range (e.g. `77-82`).
 Values should be between `0` and `119`. Example:
 
-`java -jar img2splat.jar -i myimage.png -r 28,77-82,100`
+`java -jar img2splat.jar myimage.png -r 28,77-82,100`
 
 When using repair mode, `macro_preview.png` will show "unvisited" pixels -- areas to be skipped by the macro -- as blue.
 Repair macros still start from the upper-left corner of the canvas like regular macros, so most preparation steps are
