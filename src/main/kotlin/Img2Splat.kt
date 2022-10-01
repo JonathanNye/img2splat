@@ -24,14 +24,14 @@ enum class Button(val macroToken: String) {
     MINUS("MINUS"),
 }
 
-data class Command(
-    val button: Button?, // NXBT also supports multiple buttons at once, but we're only ever pressing one
-    val duration: BigDecimal
+class Command(
+    private val duration: BigDecimal,
+    vararg val buttons: Button, // We can have zero, one, or many buttons pressed
 ) {
-    override fun toString() = if (button == null) {
+    override fun toString() = if (buttons.isEmpty()) {
         "${duration}s"
     } else {
-        "${button.macroToken} ${duration}s"
+        "${buttons.joinToString(separator = " ") { it.macroToken }} ${duration}s"
     }
 }
 
@@ -39,13 +39,43 @@ class MacroBuilder(private val defaultPressDuration: BigDecimal) {
     private val _commands: MutableList<Command> = mutableListOf()
     val commands: List<Command> = _commands
 
-    fun addButtonPress(button: Button, duration: BigDecimal = defaultPressDuration) {
-        _commands.add(Command(button, duration))
+    fun addButtonPress(vararg button: Button, duration: BigDecimal = defaultPressDuration) {
+        _commands.add(Command(duration, *button))
         addNeutral(duration)
     }
 
-    fun addNeutral(duration: BigDecimal) {
-        _commands.add(Command(null, duration))
+    fun addNeutral(duration: BigDecimal = defaultPressDuration) {
+        _commands.add(Command(duration))
+    }
+
+    fun addRunLengthEncodedLine(encodedLine: RunLengthEncodedLine, duration: BigDecimal = defaultPressDuration) {
+        val moveButton = encodedLine.direction.moveButton
+        encodedLine.segments.forEachIndexed { segmentIdx, segment ->
+            val isLastSegment = segmentIdx == encodedLine.segments.size - 1
+            if (segment.isBlack) {
+                if (segment.length == 1) {
+                    addButtonPress(Button.A)
+                } else {
+                    (0 until (segment.length - 1)).forEach { idx ->
+                        if (idx == 0) {
+                            _commands.add(Command(duration, Button.A)) // A goes down
+                        }
+                        _commands.add(Command(duration, Button.A, moveButton)) // A + move
+                        if (idx < segment.length - 1) {
+                            _commands.add(Command(duration, Button.A))
+                        }
+                    }
+                    _commands.add(Command(duration)) // neutral
+                }
+            } else {
+                repeat(segment.length - 1) {
+                    addButtonPress(moveButton)
+                }
+            }
+            if (!isLastSegment) {
+                addButtonPress(moveButton) // move to next segment
+            }
+        }
     }
 }
 
@@ -125,22 +155,10 @@ fun main(args: Array<String>) {
             }
             continue
         }
-        val xRange = when (currentDirection) {
-            HorizontalDirection.LEFT -> (WIDTH - 1) downTo 0
-            HorizontalDirection.RIGHT -> 0 until WIDTH
-        }
-        for (x in xRange) {
-            if (img.blackPixel(x, y)) {
-                macro.addButtonPress(Button.A)
-            }
-            val shouldMoveHorizontally = when (currentDirection) {
-                HorizontalDirection.LEFT -> x > 0
-                HorizontalDirection.RIGHT -> x < (WIDTH - 1)
-            }
-            if (shouldMoveHorizontally) {
-                macro.addButtonPress(currentDirection.moveButton)
-            }
-        }
+
+        val encodedLine = runLengthEncode(img, y, currentDirection)
+        macro.addRunLengthEncodedLine(encodedLine)
+
         currentDirection = when (currentDirection) {
             HorizontalDirection.LEFT -> HorizontalDirection.RIGHT
             HorizontalDirection.RIGHT -> HorizontalDirection.LEFT
@@ -163,6 +181,43 @@ fun main(args: Array<String>) {
     println("Generated ${macro.commands.size} operations, nice!")
 }
 
+data class RunLengthSegment(val length: Int, val isBlack: Boolean) {
+    init {
+        if (length < 1 || length > WIDTH) {
+            throw IllegalArgumentException("Illegal segment length $length")
+        }
+    }
+}
+data class RunLengthEncodedLine(val segments: List<RunLengthSegment>, val direction: HorizontalDirection)
+fun runLengthEncode(img: BufferedImage, line: Int, direction: HorizontalDirection): RunLengthEncodedLine {
+    val xRange = when (direction) {
+        HorizontalDirection.LEFT -> (WIDTH - 1) downTo 0
+        HorizontalDirection.RIGHT -> 0 until WIDTH
+    }
+    val segments = mutableListOf<RunLengthSegment>()
+    val blackPixels = xRange.map { x -> img.blackPixel(x, line) }
+    val pixelIter = blackPixels.iterator()
+    var currentSegment = RunLengthSegment(length = 1, isBlack = pixelIter.next())
+    while(pixelIter.hasNext()) {
+        val nextBlack = pixelIter.next()
+        currentSegment = if (nextBlack == currentSegment.isBlack) {
+            currentSegment.copy(
+                length = currentSegment.length + 1
+            )
+        } else {
+            // New segment
+            segments.add(currentSegment)
+            RunLengthSegment(length = 1, isBlack = nextBlack)
+        }
+    }
+    // Add the last segment
+    segments.add(currentSegment)
+    return RunLengthEncodedLine(
+        segments = segments,
+        direction = direction,
+    )
+}
+
 fun BufferedImage.blackPixel(x: Int, y: Int): Boolean {
     val color = getRGB(x, y)
     val r = color shr 16 and 0xFF
@@ -173,35 +228,45 @@ fun BufferedImage.blackPixel(x: Int, y: Int): Boolean {
 }
 
 fun generatePreview(commands: List<Command>) {
-    val img = BufferedImage(320, 120, BufferedImage.TYPE_INT_RGB)
-    for (y in (0 until 120)) {
-        for (x in (0 until 320)) {
+    val img = BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_INT_RGB)
+    for (y in (0 until HEIGHT)) {
+        for (x in (0 until WIDTH)) {
             img.setRGB(x, y, 0xFF0000FF.toInt())
         }
     }
     var x = 0
     var y = 0
+    var aPressed: Boolean
     img.setRGB(0, 0, 0xFFFFFFFF.toInt())
     commands.forEach { command ->
-        when(command.button) {
-            Button.DOWN -> {
-                y += 1
-                img.setRGB(x, y, 0xFFFFFFFF.toInt())
-            }
-            Button.LEFT -> {
-                x -= 1
-                img.setRGB(x, y, 0xFFFFFFFF.toInt())
-            }
-            Button.RIGHT -> {
-                x += 1
-                img.setRGB(x, y, 0xFFFFFFFF.toInt())
-            }
-            Button.A -> {
+        aPressed = false
+        if(command.buttons.contains(Button.A)) {
+            img.setRGB(x, y, 0xFF000000.toInt())
+            aPressed = true
+        }
+        if(command.buttons.contains(Button.DOWN)) {
+            y += 1
+            if (aPressed) {
                 img.setRGB(x, y, 0xFF000000.toInt())
+            } else {
+                img.setRGB(x, y, 0xFFFFFFFF.toInt())
             }
-            Button.HOME -> Unit
-            Button.MINUS -> Unit
-            null -> Unit
+        }
+        if(command.buttons.contains(Button.LEFT)) {
+            x -= 1
+            if (aPressed) {
+                img.setRGB(x, y, 0xFF000000.toInt())
+            } else {
+                img.setRGB(x, y, 0xFFFFFFFF.toInt())
+            }
+        }
+        if(command.buttons.contains(Button.RIGHT)) {
+            x += 1
+            if (aPressed) {
+                img.setRGB(x, y, 0xFF000000.toInt())
+            } else {
+                img.setRGB(x, y, 0xFFFFFFFF.toInt())
+            }
         }
     }
     val outFile = File(PREVIEW_FILENAME)
