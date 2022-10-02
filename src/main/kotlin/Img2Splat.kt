@@ -1,11 +1,11 @@
 import kotlinx.cli.ArgParser
 import kotlinx.cli.ArgType
-import kotlinx.cli.default
-import kotlinx.cli.required
 import java.awt.image.BufferedImage
 import java.io.File
 import java.math.BigDecimal
 import javax.imageio.ImageIO
+import kotlin.math.max
+import kotlin.math.min
 
 const val WIDTH = 320
 const val HEIGHT = 120
@@ -175,8 +175,9 @@ class Img2Splat(private val options: Options) {
         var currentDirection: HorizontalDirection = HorizontalDirection.RIGHT
 
         macro.addNeutral(MACRO_START_DELAY)
-
+        var currentX = 0
         for (y in (0 until HEIGHT)) {
+            // TODO account for next row being a repair row
             if (!options.repairRows.contains(y)) {
                 // If we're not supposed to repair this row, just continue down to the next one
                 if (y < HEIGHT - 1) { // Don't go off the bottom edge
@@ -184,13 +185,46 @@ class Img2Splat(private val options: Options) {
                 }
                 continue
             }
+            val currentLineExtent = options.img.rowDrawRange(y)
+            val nextLineExtent = if (y == HEIGHT - 1) null else { options.img.rowDrawRange(y + 1) }
 
-            val encodedLine = runLengthEncode(options.img, y, currentDirection)
+            // Only add the commands and swap direction if the current line has pixels to draw or the next line has pixels
+            // we need to draw, and we should move to the start of the next line
+            if (currentLineExtent != null || nextLineExtent != null) {
 
-            // Only add the commands and swap direction if the line has pixels to draw
-            if (encodedLine.segments != listOf(RunLengthSegment(WIDTH, false))) {
+                val currentLineRange = when (currentDirection) {
+                    HorizontalDirection.LEFT -> {
+                        val targetX = when {
+                            currentLineExtent != null && nextLineExtent != null -> {
+                                min(currentLineExtent.first, nextLineExtent.first)
+                            }
+                            currentLineExtent != null -> {
+                                currentLineExtent.first
+                            }
+                            else -> { // nextLineExtent != null
+                                nextLineExtent!!.first // compiler not quite clever enough here
+                            }
+                        }
+                        currentX downTo targetX
+                    }
+                    HorizontalDirection.RIGHT -> {
+                        val targetX = when {
+                            currentLineExtent != null && nextLineExtent != null -> {
+                                max(currentLineExtent.last, nextLineExtent.last)
+                            }
+                            currentLineExtent != null -> {
+                                currentLineExtent.last
+                            }
+                            else -> { // nextLineExtent != null
+                                nextLineExtent!!.last // compiler not quite clever enough here
+                            }
+                        }
+                        currentX..targetX
+                    }
+                }
+                val encodedLine = runLengthEncode(options.img, y, currentLineRange)
                 macro.addRunLengthEncodedLine(encodedLine)
-
+                currentX = currentLineRange.last
                 currentDirection = when (currentDirection) {
                     HorizontalDirection.LEFT -> HorizontalDirection.RIGHT
                     HorizontalDirection.RIGHT -> HorizontalDirection.LEFT
@@ -228,13 +262,13 @@ data class RunLengthSegment(val length: Int, val isBlack: Boolean) {
     }
 }
 data class RunLengthEncodedLine(val segments: List<RunLengthSegment>, val direction: HorizontalDirection)
-fun runLengthEncode(img: BufferedImage, line: Int, direction: HorizontalDirection): RunLengthEncodedLine {
-    val xRange = when (direction) {
-        HorizontalDirection.LEFT -> (WIDTH - 1) downTo 0
-        HorizontalDirection.RIGHT -> 0 until WIDTH
-    }
+fun runLengthEncode(
+    img: BufferedImage,
+    line: Int,
+    xProgression: IntProgression,
+): RunLengthEncodedLine {
     val segments = mutableListOf<RunLengthSegment>()
-    val blackPixels = xRange.map { x -> img.blackPixel(x, line) }
+    val blackPixels = xProgression.map { x -> img.blackPixel(x, line) }
     val pixelIter = blackPixels.iterator()
     var currentSegment = RunLengthSegment(length = 1, isBlack = pixelIter.next())
     while(pixelIter.hasNext()) {
@@ -253,7 +287,7 @@ fun runLengthEncode(img: BufferedImage, line: Int, direction: HorizontalDirectio
     segments.add(currentSegment)
     return RunLengthEncodedLine(
         segments = segments,
-        direction = direction,
+        direction = if (xProgression.first < xProgression.last) HorizontalDirection.RIGHT else HorizontalDirection.LEFT,
     )
 }
 
@@ -264,6 +298,30 @@ fun BufferedImage.blackPixel(x: Int, y: Int): Boolean {
     val b = color shr 0 and 0xFF
     val luminance = (r * 0.2126f + g * 0.7152f + b * 0.0722f) / 255
     return luminance < 0.5f
+}
+
+// returns the x indexes of the outermost drawn pixels, or null if no pixels should be drawn
+// TODO: directional?
+fun BufferedImage.rowDrawRange(y: Int): IntRange? {
+    var start: Int? = null
+    var end: Int? = null
+    for (x in (0 until WIDTH)) {
+        if (blackPixel(x, y)) {
+            start = x
+            break
+        }
+    }
+    for (x in ((WIDTH - 1) downTo 0)) {
+        if (blackPixel(x, y)) {
+            end = x
+            break
+        }
+    }
+    return if (start == null || end == null) {
+        null
+    } else {
+        start..end
+    }
 }
 
 fun generatePreview(commands: List<Command>): File {
