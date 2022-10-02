@@ -212,7 +212,7 @@ class Img2Splat(private val options: Options) {
             out.flush()
         }
         val previewFile = generatePreview(macro.commands)
-        println("Generated ${macro.commands.size} operations, nice!")
+        println("Generated ${macro.commands.size} operations. Woomy!")
         return Result(
             macroFile = macroFile,
             previewFile = previewFile,
