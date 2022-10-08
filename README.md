@@ -10,6 +10,12 @@ with Splatoon 3, but might work with earlier titles.
 ## Getting your image into Splatoon
 
 1. Install [NXBT](https://github.com/Brikwerk/nxbt) and verify connectivity with your Switch by running the demo
+    1. Some have reported issues with running very long macros with NXBT where it skips inputs.
+       I [made a fork](https://github.com/JonathanNye/nxbt/tree/experiment/busy-wait) that tries to address some of the
+       timing issues. If you want to try using this fork, clone the linked branch and...
+        1. On Linux systems, instead of doing `sudo pip3 install nxbt`, do `pip3 install -e .` from the root of the repo
+        2. On Windows/macOS, follow the instructions in the readme, but make sure you choose to install NXBT from local
+           files.
 2. Make a 320 x 120 image
     1. The image does not necessarily need to be black and white, img2splat will look at the luminance of each pixel to
        decide if
