@@ -177,19 +177,17 @@ class Img2Splat(private val options: Options) {
         macro.addNeutral(MACRO_START_DELAY)
         var currentX = 0
         for (y in (0 until HEIGHT)) {
-            // TODO account for next row being a repair row
-            if (!options.repairRows.contains(y)) {
-                // If we're not supposed to repair this row, just continue down to the next one
-                if (y < HEIGHT - 1) { // Don't go off the bottom edge
-                    macro.addButtonPress(Button.DOWN)
-                }
-                continue
-            }
-            val currentLineExtent = options.img.rowDrawRange(y)
-            val nextLineExtent = if (y == HEIGHT - 1) null else { options.img.rowDrawRange(y + 1) }
+            
+            val currentLineExtent = if (options.repairRows.contains(y)) {
+                options.img.rowDrawRange(y)
+            } else null
+            val nextLineExtent = if (options.repairRows.contains(y + 1)) {
+                options.img.rowDrawRange(y + 1)
+            } else null
 
-            // Only add the commands and swap direction if the current line has pixels to draw or the next line has pixels
-            // we need to draw, and we should move to the start of the next line
+            // Only add the commands and swap direction if:
+            // 1. the current line has pixels to draw
+            // 2. the next line has pixels we need to draw, and we should move to the start of the next line
             if (currentLineExtent != null || nextLineExtent != null) {
 
                 val currentLineRange = when (currentDirection) {
