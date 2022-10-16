@@ -1,5 +1,6 @@
 import kotlinx.cli.ArgParser
 import kotlinx.cli.ArgType
+import kotlinx.cli.default
 import java.awt.image.BufferedImage
 import java.io.File
 import java.math.BigDecimal
@@ -19,6 +20,7 @@ const val PREVIEW_TYPE = "png"
 val DEFAULT_PRESS_DURATION = BigDecimal("0.1")
 val MACRO_START_DELAY = BigDecimal("3.0")
 val MACRO_END_DELAY = BigDecimal("5.0")
+const val CAUTIOUS_EXTRA_SHUNT_MOVES = 3
 
 enum class Button(val macroToken: String) {
     DOWN("DPAD_DOWN"),
@@ -33,7 +35,12 @@ enum class Button(val macroToken: String) {
 class Command(
     private val duration: BigDecimal,
     vararg val buttons: Button, // We can have zero, one, or many buttons pressed
+    // If everything is going well, this command *shouldn't* do anything and can thus be ignored for preview generation
+    // purposes, but may serve to help reduce error propagation. An example is trying to move the cursor over the edge
+    // of the drawing canvas.
+    intendedIdempotent: Boolean = false,
 ) {
+    val intendedIdempotent = intendedIdempotent || buttons.isEmpty()
     override fun toString() = if (buttons.isEmpty()) {
         "${duration}s"
     } else {
@@ -49,25 +56,31 @@ class MacroBuilder(
     val commands: List<Command> = _commands
     private val drawButton = if (inverted) Button.B else Button.A
 
-    fun addButtonPress(vararg button: Button, duration: BigDecimal = defaultPressDuration) {
-        _commands.add(Command(duration, *button))
-        addNeutral(duration)
+    fun addButtonPress(vararg buttons: Button) {
+        _commands.add(Command(defaultPressDuration, *buttons))
+        addNeutral(defaultPressDuration)
+    }
+
+    // For button presses that *shouldn't* change the state of the drawing canvas/cursor if everything is going well,
+    // but may help to fix things if they do result in changes
+    fun addIdempotentButtonPress(vararg buttons: Button) {
+        _commands.add(Command(defaultPressDuration, *buttons, intendedIdempotent = true))
     }
 
     fun addNeutral(duration: BigDecimal = defaultPressDuration) {
         _commands.add(Command(duration))
     }
 
-    fun drawImage(img: BufferedImage, repairRows: List<Int>) {
+    fun drawImage(img: BufferedImage, repairRows: List<Int>, cautious: Boolean) {
         var currentDirection: HorizontalDirection = HorizontalDirection.RIGHT
         var currentX = 0
 
         for (y in (0 until HEIGHT)) {
             val currentLineExtent = if (repairRows.contains(y)) {
-                img.rowDrawRange(y, inverted)
+                img.rowDrawRange(y, inverted, cautious)
             } else null
             val nextLineExtent = if (repairRows.contains(y + 1)) {
-                img.rowDrawRange(y + 1, inverted)
+                img.rowDrawRange(y + 1, inverted, cautious)
             } else null
 
             // Only add the commands and swap direction if:
@@ -107,6 +120,15 @@ class MacroBuilder(
                 }
                 val encodedLine = runLengthEncode(img, y, currentLineRange)
                 addRunLengthEncodedLine(encodedLine)
+
+                // If we're in cautious mode, we can also add a few extra moves to force the cursor into the edge of
+                // the canvas in case we came up short and help reduce error propagation.
+                if (cautious) {
+                    repeat(CAUTIOUS_EXTRA_SHUNT_MOVES) {
+                        addIdempotentButtonPress(currentDirection.moveButton)
+                    }
+                }
+
                 currentX = currentLineRange.last
                 currentDirection = when (currentDirection) {
                     HorizontalDirection.LEFT -> HorizontalDirection.RIGHT
@@ -119,7 +141,10 @@ class MacroBuilder(
         }
     }
 
-    private fun addRunLengthEncodedLine(encodedLine: RunLengthEncodedLine, duration: BigDecimal = defaultPressDuration) {
+    private fun addRunLengthEncodedLine(
+        encodedLine: RunLengthEncodedLine,
+        duration: BigDecimal = defaultPressDuration
+    ) {
         val moveButton = encodedLine.direction.moveButton
         encodedLine.segments.forEachIndexed { segmentIdx, segment ->
             val isLastSegment = segmentIdx == encodedLine.segments.size - 1
@@ -167,9 +192,11 @@ enum class HorizontalDirection(val moveButton: Button) {
 
 fun main(args: Array<String>) {
     val parser = ArgParser("java -jar img2splat.jar")
-    val filePath by parser.argument(ArgType.String,
+    val filePath by parser.argument(
+        ArgType.String,
         fullName = "input",
-        description = "Input image path")
+        description = "Input image path"
+    )
     val durationInput by parser.option(
         ArgType.String,
         fullName = "pressDuration",
@@ -182,6 +209,12 @@ fun main(args: Array<String>) {
         shortName = "r",
         description = "Comma separated-list of image rows or ranges between 0 and ${HEIGHT - 1} inclusive to repair, e.g. 78,99-102,105",
     )
+    val cautious by parser.option(
+        ArgType.Boolean,
+        fullName = "cautious",
+        shortName = "c",
+        description = "Flag to turn off line draw extent optimization and force drawing edge-to-edge, which can help reduce error propagation"
+    ).default(false)
 
     parser.parse(args)
 
@@ -189,7 +222,8 @@ fun main(args: Array<String>) {
         Img2Splat.Options.validateAndBuildFromInput(
             filePath = filePath,
             durationInput = durationInput,
-            repairInput = repairInput
+            repairInput = repairInput,
+            cautious = cautious,
         )
     } catch (t: Throwable) {
         println(t.message)
@@ -206,16 +240,19 @@ class Img2Splat(private val options: Options) {
         val invertedMacroFile: File,
         val invertedPreviewFile: File,
     )
+
     data class Options(
         val img: BufferedImage,
         val pressDuration: BigDecimal,
         val repairRows: List<Int>,
+        val cautious: Boolean,
     ) {
         companion object {
             fun validateAndBuildFromInput(
                 filePath: String,
                 durationInput: String?,
                 repairInput: String?,
+                cautious: Boolean,
             ): Options {
                 val imgFile = File(filePath)
                 val img: BufferedImage = ImageIO.read(imgFile)
@@ -248,7 +285,7 @@ class Img2Splat(private val options: Options) {
                 val repairRows = repairRanges
                     .flatMap { it.toList() }
 
-                return Options(img, pressDuration, repairRows)
+                return Options(img, pressDuration, repairRows, cautious)
             }
         }
     }
@@ -260,7 +297,7 @@ class Img2Splat(private val options: Options) {
 
         for (macro in arrayOf(regularMacro, invertedMacro)) {
             macro.addNeutral(MACRO_START_DELAY)
-            macro.drawImage(options.img, options.repairRows)
+            macro.drawImage(options.img, options.repairRows, options.cautious)
             macro.addButtonPress(Button.MINUS)
             macro.addNeutral(MACRO_END_DELAY)
         }
@@ -291,11 +328,12 @@ class Img2Splat(private val options: Options) {
         val lower = min(regNumCommands, invNumCommands).toDouble()
         val percentDecrease = abs(higher - lower) / higher * 100.0
         if (percentDecrease < 1) {
-            println("They're pretty close, probably just use $MACRO_FILENAME.")
+            println("They're pretty close! Probably just use $MACRO_FILENAME if you're doing a first run.")
         } else {
             val formattedDiff = DecimalFormat("0.0#").format(percentDecrease)
             println("Recommend using $recommendedFile, which has $formattedDiff% fewer operations.")
         }
+        println("If you're repairing after an initial run, stick to the same type you started with.")
         println("If you decide to use the inverted macro, don't forget to fill your canvas with black pixels before starting!")
         println("Woomy!")
 
@@ -315,17 +353,18 @@ data class RunLengthSegment(val length: Int, val isBlack: Boolean) {
         }
     }
 }
+
 data class RunLengthEncodedLine(val segments: List<RunLengthSegment>, val direction: HorizontalDirection)
+
 fun runLengthEncode(
     img: BufferedImage,
     line: Int,
     xProgression: IntProgression,
 ): RunLengthEncodedLine {
     val segments = mutableListOf<RunLengthSegment>()
-    val blackPixels = xProgression.map { x -> img.blackPixel(x, line) }
-    val pixelIter = blackPixels.iterator()
+    val pixelIter = xProgression.asSequence().map { x -> img.blackPixel(x, line) }.iterator()
     var currentSegment = RunLengthSegment(length = 1, isBlack = pixelIter.next())
-    while(pixelIter.hasNext()) {
+    while (pixelIter.hasNext()) {
         val nextBlack = pixelIter.next()
         currentSegment = if (nextBlack == currentSegment.isBlack) {
             currentSegment.copy(
@@ -354,9 +393,8 @@ fun BufferedImage.blackPixel(x: Int, y: Int): Boolean {
     return luminance < 0.5f
 }
 
-// returns the x indexes of the outermost drawn pixels, or null if no pixels should be drawn
-// TODO: directional?
-fun BufferedImage.rowDrawRange(y: Int, inverted: Boolean): IntRange? {
+// Returns the x indexes of the outermost pixels to draw, or null if no pixels should be drawn
+fun BufferedImage.rowDrawRange(y: Int, inverted: Boolean, cautious: Boolean): IntRange? {
     var start: Int? = null
     var end: Int? = null
     for (x in (0 until WIDTH)) {
@@ -376,24 +414,18 @@ fun BufferedImage.rowDrawRange(y: Int, inverted: Boolean): IntRange? {
     return if (start == null || end == null) {
         null
     } else {
-        start..end
+        if (cautious) {
+            0 until WIDTH
+        } else {
+            start..end
+        }
     }
 }
-
-//fun BufferedImage.inversionInfo(): Pair<Int, Boolean> {
-//    val blackPxCount = (0 until HEIGHT).asSequence()
-//        .flatMap { y ->
-//            (0 until WIDTH).asSequence().map { x -> x to y }
-//        }
-//        .map { (x, y) -> blackPixel(x, y) }
-//        .count { it }
-//    return blackPxCount to (blackPxCount > INVERSION_THRESHOLD)
-//}
 
 const val BLUE = 0xFF0000FF.toInt()
 const val WHITE = 0xFFFFFFFF.toInt()
 const val BLACK = 0xFF000000.toInt()
-fun generatePreview(file :File, commands: List<Command>, inverted: Boolean) {
+fun generatePreview(file: File, commands: List<Command>, inverted: Boolean) {
     val img = BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_INT_RGB)
     for (y in (0 until HEIGHT)) {
         for (x in (0 until WIDTH)) {
@@ -403,12 +435,13 @@ fun generatePreview(file :File, commands: List<Command>, inverted: Boolean) {
     val visitedColor = if (inverted) BLACK else WHITE
     var x = 0
     var y = 0
-    var aPressed: Boolean
-    var bPressed: Boolean
     img.setRGB(0, 0, visitedColor)
-    commands.forEach { command ->
-        bPressed = false
-        aPressed = false
+    for (command in commands) {
+        if (command.intendedIdempotent) {
+            continue
+        }
+        var bPressed = false
+        var aPressed = false
         if (command.buttons.contains(Button.A)) {
             img.setRGB(x, y, BLACK)
             aPressed = true
@@ -446,14 +479,15 @@ fun generatePreview(file :File, commands: List<Command>, inverted: Boolean) {
 
 fun String.toRowRange(): IntRange {
     val range = if (!this.contains("-")) { // Assume it's a single number
-            val number = this.toInt()
-            number..number
-        } else { // Try to split it apart
-            val numbers = this.split('-')
-            numbers[0].toInt()..numbers[1].toInt()
-        }
-    if (range.first < 0 || range.first >= HEIGHT -1 ||
-        range.last < 0 || range.last >= HEIGHT) {
+        val number = this.toInt()
+        number..number
+    } else { // Try to split it apart
+        val numbers = this.split('-')
+        numbers[0].toInt()..numbers[1].toInt()
+    }
+    if (range.first < 0 || range.first >= HEIGHT - 1 ||
+        range.last < 0 || range.last >= HEIGHT
+    ) {
         throw Exception("Range outside image bounds")
     }
     return range

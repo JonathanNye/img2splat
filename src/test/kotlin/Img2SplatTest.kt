@@ -12,6 +12,7 @@ class Img2SplatTest {
             filePath = testFilePath,
             durationInput = null,
             repairInput = null,
+            cautious = false
         )
         val result = Img2Splat(options).splat()
 
