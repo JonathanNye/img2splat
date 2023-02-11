@@ -20,8 +20,8 @@ with Splatoon 3, but might work with earlier titles.
     1. The image does not necessarily need to be black and white. img2splat will look at the luminance of each pixel to
        decide if it should be black or white
     2. If you want [dithering](https://en.wikipedia.org/wiki/Dither) in your image to approximate shades of grey,
-       img2splat will _not_ do that for you. Graphics software like [the GIMP](https://www.gimp.org/) can dither your
-       image for you
+       img2splat will _not_ do that for you. Software like [GIMP](https://www.gimp.org/) or [Dither Me 
+       This](https://doodad.dev/dither-me-this/) can dither your image for you
     3. A lossless format like PNG is probably ideal
 3. Run img2splat with your image as the input, which will spit out a handful of files:
     1. `splat_macro.txt`/`splat_macro_inverted.txt`: These are actual list of commands for NXBT to run. You choose *one*
