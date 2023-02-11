@@ -485,7 +485,7 @@ fun String.toRowRange(): IntRange {
         val numbers = this.split('-')
         numbers[0].toInt()..numbers[1].toInt()
     }
-    if (range.first < 0 || range.first >= HEIGHT - 1 ||
+    if (range.first < 0 || range.first >= HEIGHT ||
         range.last < 0 || range.last >= HEIGHT
     ) {
         throw Exception("Range outside image bounds")

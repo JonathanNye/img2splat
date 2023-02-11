@@ -1,4 +1,5 @@
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertDoesNotThrow
 import java.io.File
 import javax.imageio.ImageIO
 import kotlin.test.assertEquals
@@ -32,4 +33,16 @@ class Img2SplatTest {
         }
     }
 
+    @Test
+    fun `Ensure last line can be repaired`() {
+        val testFilePath = this::class.java.getResource("test_jiji.png").file
+        val options = Img2Splat.Options.validateAndBuildFromInput(
+            filePath = testFilePath,
+            durationInput = null,
+            repairInput = "119",
+            cautious = false
+        )
+
+        assertDoesNotThrow { Img2Splat(options).splat() }
+    }
 }
