@@ -26,3 +26,9 @@ hs_err_pid*
 build/
 .idea/
 *.iml
+
+# Dev quality of life
+macro_preview.png
+macro_preview_inverted.png
+splat_macro.txt
+splat_macro_inverted.txt
