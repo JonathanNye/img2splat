@@ -9,6 +9,7 @@ import javax.imageio.ImageIO
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.system.exitProcess
 
 const val WIDTH = 320
 const val HEIGHT = 120
@@ -55,6 +56,7 @@ class MacroBuilder(
     private val _commands: MutableList<Command> = mutableListOf()
     val commands: List<Command> = _commands
     private val drawButton = if (inverted) Button.B else Button.A
+    private val eraseButton = if (inverted) Button.A else Button.B
 
     fun addButtonPress(vararg buttons: Button) {
         _commands.add(Command(defaultPressDuration, *buttons))
@@ -71,15 +73,17 @@ class MacroBuilder(
         _commands.add(Command(duration))
     }
 
-    fun drawImage(img: BufferedImage, repairRows: List<Int>, cautious: Boolean) {
+    fun drawImage(img: BufferedImage, partialRows: List<Int>?, cautious: Boolean) {
         var currentDirection: HorizontalDirection = HorizontalDirection.RIGHT
         var currentX = 0
 
+        val drawRows = partialRows ?: (0 until HEIGHT).toList()
+
         for (y in (0 until HEIGHT)) {
-            val currentLineExtent = if (repairRows.contains(y)) {
+            val currentLineExtent = if (drawRows.contains(y)) {
                 img.rowDrawRange(y, inverted, cautious)
             } else null
-            val nextLineExtent = if (repairRows.contains(y + 1)) {
+            val nextLineExtent = if (drawRows.contains(y + 1)) {
                 img.rowDrawRange(y + 1, inverted, cautious)
             } else null
 
@@ -88,7 +92,7 @@ class MacroBuilder(
             // 2. the next line has pixels we need to draw, and we should move to the start of the next line
             if (currentLineExtent != null || nextLineExtent != null) {
 
-                val currentLineRange = when (currentDirection) {
+                val currentLineProgression = when (currentDirection) {
                     HorizontalDirection.LEFT -> {
                         val targetX = when {
                             currentLineExtent != null && nextLineExtent != null -> {
@@ -118,7 +122,13 @@ class MacroBuilder(
                         currentX..targetX
                     }
                 }
-                val encodedLine = runLengthEncode(img, y, currentLineRange)
+                val encodedLine = if (currentLineExtent == null) {
+                    // If we're not drawing anything on this line (just moving into place for the next line), just move
+                    val moveSegment = RunLengthSegment(length = currentLineProgression.toList().size, isBlack = inverted)
+                    RunLengthEncodedLine(listOf(moveSegment), currentDirection)
+                } else {
+                    runLengthEncode(img, y, currentLineProgression)
+                }
                 addRunLengthEncodedLine(encodedLine)
 
                 // If we're in cautious mode, we can also add a few extra moves to force the cursor into the edge of
@@ -129,12 +139,59 @@ class MacroBuilder(
                     }
                 }
 
-                currentX = currentLineRange.last
-                currentDirection = when (currentDirection) {
-                    HorizontalDirection.LEFT -> HorizontalDirection.RIGHT
-                    HorizontalDirection.RIGHT -> HorizontalDirection.LEFT
+                currentX = currentLineProgression.last
+                currentDirection = currentDirection.flipped()
+            }
+            if (y < HEIGHT - 1) { // Don't go off the bottom edge
+                addButtonPress(Button.DOWN)
+            }
+        }
+    }
+
+    fun repairImage(img: BufferedImage, repairRows: List<Int>) {
+        var currentDirection: HorizontalDirection = HorizontalDirection.RIGHT
+
+        for (y in (0 until HEIGHT)) {
+            if (y in repairRows) {
+                // Always erase repair rows, then go back and draw if needed
+
+                // Erase the current row
+                _commands.add(Command(defaultPressDuration, eraseButton)) // erase button goes down
+                repeat(WIDTH - 1) {
+                    // erase button + move
+                    _commands.add(Command(defaultPressDuration, eraseButton, currentDirection.moveButton))
+                    _commands.add(Command(defaultPressDuration, eraseButton)) // erase button held
+                }
+                _commands.add(Command(defaultPressDuration)) // neutral, erase button goes up
+
+                // We're moving edge-to-edge anyway, so this is cheap insurance
+                repeat(CAUTIOUS_EXTRA_SHUNT_MOVES) {
+                    addIdempotentButtonPress(currentDirection.moveButton)
+                }
+
+                // We're now at the other side
+                currentDirection = currentDirection.flipped()
+
+                // Draw if needed
+
+                // cautious doesn't strictly matter here
+                val rowNeedsDrawing = img.rowDrawRange(y, inverted, cautious = true) != null
+                if (rowNeedsDrawing) {
+                    val currentLineProgression = when (currentDirection) {
+                        HorizontalDirection.LEFT -> (WIDTH - 1) downTo 0
+                        HorizontalDirection.RIGHT -> 0 until WIDTH
+                    }
+                    val encodedLine = runLengthEncode(img, y, currentLineProgression)
+                    addRunLengthEncodedLine(encodedLine)
+
+                    repeat(CAUTIOUS_EXTRA_SHUNT_MOVES) {
+                        addIdempotentButtonPress(currentDirection.moveButton)
+                    }
+
+                    currentDirection = currentDirection.flipped()
                 }
             }
+
             if (y < HEIGHT - 1) { // Don't go off the bottom edge
                 addButtonPress(Button.DOWN)
             }
@@ -153,14 +210,10 @@ class MacroBuilder(
                 if (segment.length == 1) {
                     addButtonPress(drawButton)
                 } else {
-                    (0 until (segment.length - 1)).forEach { idx ->
-                        if (idx == 0) {
-                            _commands.add(Command(duration, drawButton)) // draw button goes down
-                        }
+                    _commands.add(Command(duration, drawButton)) // draw button goes down
+                    repeat(segment.length - 1) {
                         _commands.add(Command(duration, drawButton, moveButton)) // draw button + move
-                        if (idx < segment.length - 1) {
-                            _commands.add(Command(duration, drawButton)) // draw button held
-                        }
+                        _commands.add(Command(duration, drawButton)) // draw button held
                     }
                     _commands.add(Command(duration)) // neutral, draw button goes up
                 }
@@ -187,7 +240,12 @@ class MacroBuilder(
 }
 
 enum class HorizontalDirection(val moveButton: Button) {
-    LEFT(Button.LEFT), RIGHT(Button.RIGHT)
+    LEFT(Button.LEFT), RIGHT(Button.RIGHT);
+
+    fun flipped(): HorizontalDirection = when (this) {
+        LEFT -> RIGHT
+        RIGHT -> LEFT
+    }
 }
 
 fun main(args: Array<String>) {
@@ -203,11 +261,17 @@ fun main(args: Array<String>) {
         shortName = "d",
         description = "Duration of button presses in seconds, e.g. 0.1"
     )
+    val partialInput by parser.option(
+        ArgType.String,
+        fullName = "partialRows",
+        shortName = "p",
+        description = "Comma-separated list of image rows or ranges between 0 and ${HEIGHT - 1} inclusive to draw, e.g. 78,99-102,105",
+    )
     val repairInput by parser.option(
         ArgType.String,
         fullName = "repairRows",
         shortName = "r",
-        description = "Comma separated-list of image rows or ranges between 0 and ${HEIGHT - 1} inclusive to repair, e.g. 78,99-102,105",
+        description = "Comma-separated list of image rows or ranges between 0 and ${HEIGHT - 1} inclusive to repair (erase and re-draw), e.g. 78,99-102,105",
     )
     val cautious by parser.option(
         ArgType.Boolean,
@@ -222,13 +286,14 @@ fun main(args: Array<String>) {
         Img2Splat.Options.validateAndBuildFromInput(
             filePath = filePath,
             durationInput = durationInput,
+            partialInput = partialInput,
             repairInput = repairInput,
             cautious = cautious,
         )
     } catch (t: Throwable) {
         println(t.message)
-        null
-    } ?: return
+        exitProcess(1)
+    }
     Img2Splat(options).splat()
 }
 
@@ -244,13 +309,21 @@ class Img2Splat(private val options: Options) {
     data class Options(
         val img: BufferedImage,
         val pressDuration: BigDecimal,
-        val repairRows: List<Int>,
+        val traversalMode: TraversalMode,
         val cautious: Boolean,
     ) {
+
+        sealed class TraversalMode {
+            data class Partial(val partialRows: List<Int>) : TraversalMode()
+            data class Repair(val repairRows: List<Int>) : TraversalMode()
+            object Full : TraversalMode()
+        }
+
         companion object {
             fun validateAndBuildFromInput(
                 filePath: String,
                 durationInput: String?,
+                partialInput: String?,
                 repairInput: String?,
                 cautious: Boolean,
             ): Options {
@@ -274,6 +347,17 @@ class Img2Splat(private val options: Options) {
                     throw IllegalArgumentException("Button press duration should be positive and non-zero")
                 }
 
+                val partialRanges = partialInput?.split(',')
+                    ?.map { token ->
+                        try {
+                            token.toRowRange()
+                        } catch (t: Throwable) {
+                            throw IllegalArgumentException("\"$token\" is not a valid partial row or range")
+                        }
+                    }
+                val partialRows = partialRanges
+                    ?.flatMap { it.toList() }
+
                 val repairRanges = repairInput?.split(',')
                     ?.map { token ->
                         try {
@@ -281,11 +365,24 @@ class Img2Splat(private val options: Options) {
                         } catch (t: Throwable) {
                             throw IllegalArgumentException("\"$token\" is not a valid repair row or range")
                         }
-                    } ?: listOf(0 until HEIGHT) // Default to "repairing" all the rows -- do the whole image
+                    }
                 val repairRows = repairRanges
-                    .flatMap { it.toList() }
+                    ?.flatMap { it.toList() }
 
-                return Options(img, pressDuration, repairRows, cautious)
+                val traversalMode = when {
+                    partialRows != null && repairRows != null ->
+                        throw IllegalArgumentException("Partial and Repair rows are both specified, only one may be provided.")
+                    partialRows != null -> TraversalMode.Partial(partialRows)
+                    repairRows != null -> TraversalMode.Repair(repairRows)
+                    else -> TraversalMode.Full
+                }
+
+                return Options(
+                    img = img,
+                    pressDuration = pressDuration,
+                    traversalMode = traversalMode,
+                    cautious = cautious
+                )
             }
         }
     }
@@ -297,7 +394,15 @@ class Img2Splat(private val options: Options) {
 
         for (macro in arrayOf(regularMacro, invertedMacro)) {
             macro.addNeutral(MACRO_START_DELAY)
-            macro.drawImage(options.img, options.repairRows, options.cautious)
+            when (options.traversalMode) {
+                is Options.TraversalMode.Partial -> {
+                    macro.drawImage(options.img, options.traversalMode.partialRows, options.cautious)
+                }
+                is Options.TraversalMode.Repair -> {
+                    macro.repairImage(options.img, options.traversalMode.repairRows)
+                }
+                Options.TraversalMode.Full -> macro.drawImage(options.img, null, options.cautious)
+            }
             macro.addButtonPress(Button.MINUS)
             macro.addNeutral(MACRO_END_DELAY)
         }
@@ -333,8 +438,9 @@ class Img2Splat(private val options: Options) {
             val formattedDiff = DecimalFormat("0.0#").format(percentDecrease)
             println("Recommend using $recommendedFile, which has $formattedDiff% fewer operations.")
         }
-        println("If you're repairing after an initial run, stick to the same type you started with.")
-        println("If you decide to use the inverted macro, don't forget to fill your canvas with black pixels before starting!")
+        println("If you're continuing after an initial run, stick to the same type you started with.")
+        println("If you decide to use the inverted macro, don't forget to fill your canvas with black pixels before" +
+                " starting!")
         println("Woomy!")
 
         return Result(
@@ -422,9 +528,10 @@ fun BufferedImage.rowDrawRange(y: Int, inverted: Boolean, cautious: Boolean): In
     }
 }
 
-const val BLUE = 0xFF0000FF.toInt()
+const val BLUE = 0xFF0000FF.toInt() // Unvisited pixels
 const val WHITE = 0xFFFFFFFF.toInt()
 const val BLACK = 0xFF000000.toInt()
+const val ORANGE = 0xFFFFB52E.toInt() // Visited but unmodified pixels
 fun generatePreview(file: File, commands: List<Command>, inverted: Boolean) {
     val img = BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_INT_RGB)
     for (y in (0 until HEIGHT)) {
@@ -432,10 +539,10 @@ fun generatePreview(file: File, commands: List<Command>, inverted: Boolean) {
             img.setRGB(x, y, BLUE)
         }
     }
-    val visitedColor = if (inverted) BLACK else WHITE
+    //val visitedColor = if (inverted) BLACK else WHITE
     var x = 0
     var y = 0
-    img.setRGB(0, 0, visitedColor)
+    img.setRGB(0, 0, ORANGE)
     for (command in commands) {
         if (command.intendedIdempotent) {
             continue
@@ -469,8 +576,8 @@ fun generatePreview(file: File, commands: List<Command>, inverted: Boolean) {
             if (bPressed) {
                 img.setRGB(x, y, WHITE)
             }
-            if (!aPressed && !bPressed) {
-                img.setRGB(x, y, visitedColor)
+            if (!aPressed && !bPressed && img.getRGB(x, y) == BLUE) {
+                img.setRGB(x, y, ORANGE)
             }
         }
     }

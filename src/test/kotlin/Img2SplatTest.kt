@@ -1,44 +1,96 @@
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertDoesNotThrow
-import java.io.File
+import org.junit.jupiter.api.assertThrows
 import javax.imageio.ImageIO
-import kotlin.test.assertEquals
 
 class Img2SplatTest {
 
+    companion object {
+        val JIJI_TEST_INPUT = Img2SplatTest::class.java.getResource("test_jiji.png").file
+        val SQUARES_TEST_INPUT = Img2SplatTest::class.java.getResource("test_squares.png").file
+    }
+
     @Test
     fun `Full preview image matches expected preview`() {
-        val testFilePath = this::class.java.getResource("test_jiji.png").file
         val options = Img2Splat.Options.validateAndBuildFromInput(
-            filePath = testFilePath,
+            filePath = JIJI_TEST_INPUT,
             durationInput = null,
+            partialInput = null,
             repairInput = null,
             cautious = false
         )
         val result = Img2Splat(options).splat()
 
-        val expectedImg = ImageIO.read(this::class.java.getResource("test_jiji_expected.png"))
+        val expectedImg = ImageIO.read(this::class.java.getResource("jiji_full_uncautious_expected.png"))
         val outputImg = ImageIO.read(result.previewFile)
 
-        (0 until 120).forEach { y ->
-            (0 until 320).forEach { x ->
-                val expectedPx = expectedImg.getRGB(x, y)
-                val outputPx = outputImg.getRGB(x, y)
-                assertEquals(
-                    expectedPx,
-                    outputPx,
-                    "Pixels not equal at $x,$y: expected=$expectedPx, output=$outputPx"
-                )
-            }
+        assertImagesAreIdentical(
+            expected = expectedImg,
+            actual = outputImg,
+        )
+    }
+
+    @Test
+    fun `Partial and repair options cannot be provided together`() {
+        assertThrows<Throwable> {
+            Img2Splat.Options.validateAndBuildFromInput(
+                filePath = "don't care",
+                durationInput = null,
+                partialInput = "0",
+                repairInput = "0",
+                cautious = false
+            )
         }
     }
 
     @Test
-    fun `Ensure last line can be repaired`() {
-        val testFilePath = this::class.java.getResource("test_jiji.png").file
+    fun `Repair preview image matches expected preview`() {
         val options = Img2Splat.Options.validateAndBuildFromInput(
-            filePath = testFilePath,
+            filePath = SQUARES_TEST_INPUT,
             durationInput = null,
+            partialInput = null,
+            repairInput = "0,5,24,64,96,115,119",
+            cautious = false
+        )
+
+        val result = Img2Splat(options).splat()
+
+        val expectedImg = ImageIO.read(this::class.java.getResource("squares_repair_expected.png"))
+        val outputImg = ImageIO.read(result.previewFile)
+
+        assertImagesAreIdentical(
+            expected = expectedImg,
+            actual = outputImg,
+        )
+    }
+
+    @Test
+    fun `Partial preview image matches expected preview`() {
+        val options = Img2Splat.Options.validateAndBuildFromInput(
+            filePath = SQUARES_TEST_INPUT,
+            durationInput = null,
+            partialInput = "8-12,60,96,119",
+            repairInput = null,
+            cautious = false
+        )
+
+        val result = Img2Splat(options).splat()
+
+        val expectedImg = ImageIO.read(this::class.java.getResource("squares_partial_expected.png"))
+        val outputImg = ImageIO.read(result.previewFile)
+
+        assertImagesAreIdentical(
+            expected = expectedImg,
+            actual = outputImg,
+        )
+    }
+
+    @Test
+    fun `Ensure last line can be repaired`() {
+        val options = Img2Splat.Options.validateAndBuildFromInput(
+            filePath = JIJI_TEST_INPUT,
+            durationInput = null,
+            partialInput = null,
             repairInput = "119",
             cautious = false
         )
